@@ -33,7 +33,8 @@ try:
 except ImportError:
     pass
 
-from test_backend_integration import RAGGenerator, GenerationConfig, SYSTEM_PROMPT
+from rag_generate import RAGGenerator, GenerationConfig, SYSTEM_PROMPT
+
 
 
 # Global instances
@@ -251,7 +252,7 @@ IMPORTANT: You have been provided with {len(results)} paper excerpts. Make sure 
         }
         
         payload = {
-            "model": f"openai/{rag_generator.config.llm_model}",
+            "model": rag_generator.config.llm_model,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_message}
@@ -260,14 +261,18 @@ IMPORTANT: You have been provided with {len(results)} paper excerpts. Make sure 
             "max_tokens": rag_generator.config.max_tokens,
             "stream": True
         }
-        
+
         response = requests.post(
             f"{rag_generator.openrouter_base_url}/chat/completions",
             headers=headers,
             json=payload,
             stream=True
         )
-        
+
+        if response.status_code != 200:
+            yield emit("error", {"message": f"LLM API error {response.status_code}: {response.text}"})
+            return
+
         answer_chunks = []
         for line in response.iter_lines():
             if line:
@@ -291,7 +296,7 @@ IMPORTANT: You have been provided with {len(results)} paper excerpts. Make sure 
         processing_time = time.time() - start_time
         yield emit("complete", {
             "answer": answer,
-            "sources": list(sources_metadata.values()),
+            "sources": sources_metadata,
             "refined_query": refined if refined != query else None,
             "processing_time": processing_time
         })
@@ -389,12 +394,7 @@ async def websocket_query(websocket: WebSocket):
         # Use the full retrieve method which handles everything properly
         results = await loop.run_in_executor(
             None,
-            lambda: rag_generator.retrieval.retrieve(
-                refined, 
-                top_k=top_k,
-                use_hybrid=True,
-                use_reranker=use_reranker
-            )
+            lambda: rag_generator.retrieval.retrieve(refined, top_k=top_k)
         )
         
         if not results:
@@ -445,7 +445,7 @@ IMPORTANT: You have been provided with {len(results)} paper excerpts. Make sure 
         }
         
         payload = {
-            "model": f"openai/{rag_generator.config.llm_model}",
+            "model": rag_generator.config.llm_model,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_message}
@@ -454,14 +454,18 @@ IMPORTANT: You have been provided with {len(results)} paper excerpts. Make sure 
             "max_tokens": rag_generator.config.max_tokens,
             "stream": True
         }
-        
+
         response = requests.post(
             f"{rag_generator.openrouter_base_url}/chat/completions",
             headers=headers,
             json=payload,
             stream=True
         )
-        
+
+        if response.status_code != 200:
+            await websocket.send_json({"type": "error", "message": f"LLM API error {response.status_code}: {response.text}"})
+            return
+
         answer_chunks = []
         for line in response.iter_lines():
             if line:
@@ -489,7 +493,7 @@ IMPORTANT: You have been provided with {len(results)} paper excerpts. Make sure 
         await websocket.send_json({
             "type": "complete",
             "answer": answer,
-            "sources": list(sources_metadata.values()),
+            "sources": sources_metadata,
             "refined_query": refined if refined != query else None,
             "processing_time": processing_time
         })
